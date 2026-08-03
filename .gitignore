@@ -9,6 +9,9 @@ work/
 clips/
 *.jsonl
 
+# Per-machine Claude Code settings (permission allowlists etc.)
+.claude/settings.local.json
+
 __pycache__/
 *.py[cod]
 *.egg-info/
