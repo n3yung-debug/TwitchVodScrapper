@@ -1,0 +1,138 @@
+# VOD Scrapper configuration.
+# Copy to config/config.yaml and edit. Anything you leave out keeps its default.
+
+paths:
+  # The 8 TB drive, not the NVMe the game runs from.
+  recordings_dir: D:/Recordings
+  work_dir: D:/VodScrapper/work
+  output_dir: D:/VodScrapper/clips
+  markers_file: D:/VodScrapper/markers.jsonl
+  ffmpeg: ffmpeg
+  ffprobe: ffprobe
+
+twitch:
+  # From https://dev.twitch.tv/console/apps -- register an app, any redirect URI.
+  client_id: ""
+  # The token itself never goes in this file. Export it in the environment.
+  oauth_token_env: TWITCH_OAUTH_TOKEN
+  login: ""
+  broadcaster_id: ""
+  create_native_clips: true
+  # PENDING VALIDATION -- run `vodscrap verify-clip-offset` once and set this
+  # from what you actually see. Twitch's reference says vod_offset is the clip
+  # START; several client libraries say it is the END. Wrong value shifts
+  # every native clip by its own length.
+  vod_offset_is_start: true
+  max_native_clip_seconds: 60
+
+# Streamlabs multi-track mapping. Track 1 is the mixed feed you stream;
+# 2-4 are isolated so a clip can drop Discord or game music.
+tracks:
+  mixed: 1
+  mic: 2
+  game: 3
+  party: 4
+
+markers:
+  hotkey_point: f9        # tap = mark this moment
+  hotkey_funny: f10
+  hotkey_big_play: f11
+  hotkey_story: f12
+  hotkey_undo: f8         # removes the last marker
+  double_tap_seconds: 1.5 # two taps of the same key inside this = explicit range
+  padding:
+    general:  {pre: 30.0, post: 10.0}
+    funny:    {pre: 20.0, post: 8.0}
+    big_play: {pre: 45.0, post: 15.0}   # a big play needs the build-up
+    story:    {pre: 60.0, post: 20.0}
+
+detect:
+  marker_score: 100.0
+  merge_gap_seconds: 8.0
+  min_clip_seconds: 5.0
+  max_clip_seconds: 180.0
+  tighten_dead_air: true
+
+  chat:
+    enabled: true
+    # Scored against a rolling baseline, so this self-calibrates between a
+    # quiet weeknight and a busy raid. Do not replace with an absolute count.
+    baseline_seconds: 600.0
+    z_threshold: 2.5
+    reaction_lag: 4.0     # chat reacts after the fact; roll the window back
+    pre_roll: 22.0
+    post_roll: 6.0
+
+  audio:
+    enabled: true
+    spike_db: 8.0
+    min_spike_seconds: 0.6
+    pre_roll: 15.0
+
+  transcript:
+    enabled: true
+    model: large-v3-turbo
+    device: cuda
+    compute_type: int8_float16
+    # Only the neighbourhood of a candidate is transcribed -- never the whole
+    # recording. This is what keeps an 8-hour session to minutes.
+    window_pre: 60.0
+    window_post: 30.0
+
+  llm:
+    enabled: true
+    model: claude-opus-5
+    api_key_env: ANTHROPIC_API_KEY
+    generate_titles: true
+    tighten_bounds: true
+
+render:
+  encoder: hevc_nvenc
+  fallback_encoder: libx264
+  preset: p5
+  cq: 21
+  loudness_i: -14.0       # YouTube / TikTok normalisation target
+  horizontal_stream_copy: false
+  two_pass_loudness: true
+  outputs: [horizontal, vertical]
+  captions:
+    enabled: true
+    font_size: 72
+    margin_v: 260         # clear of the platform's own bottom UI
+    uppercase: true
+  vertical:
+    width: 1080
+    height: 1920
+    gameplay_height_fraction: 0.625
+    gameplay_center_x: 0.5
+    facecam_fit: cover
+    # Measure this once off a screenshot: the facecam's pixel box in the
+    # SOURCE frame. Defaults below assume 2560x1440 with the cam bottom-left.
+    facecam:
+      x: 24
+      y: 1146
+      width: 480
+      height: 270
+      calibrated: false
+
+stats:
+  enabled: true
+  regions_file: config/regions.yaml
+  sample_fps: 0.5         # summary screens sit up for 10-30s; this cannot miss one
+  anchor_threshold: 0.82
+  use_gpu: true
+  result_signal_enabled: true
+  result_signal_pre: 90.0
+  result_kill_threshold: 4
+
+retention:
+  enabled: true
+  raw_recording_days: 21
+  # Never delete a recording whose session has not been reviewed. The VOD may
+  # already have expired, making the local file the only copy.
+  require_reviewed: true
+
+ui:
+  host: 127.0.0.1
+  port: 8723
+  open_browser: true

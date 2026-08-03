@@ -1,0 +1,22 @@
+# Local configuration and calibration -- machine-specific, and config.yaml
+# holds channel identifiers. Tokens live in environment variables, never here.
+config/config.yaml
+config/regions.yaml
+config/anchors/
+
+# Pipeline output
+work/
+clips/
+*.jsonl
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+.DS_Store
+Thumbs.db

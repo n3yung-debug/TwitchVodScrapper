@@ -1,0 +1,69 @@
+# OCR calibration for Mistfall Hunter's summary screens.
+#
+# Every number here comes from a screenshot, not from code. That is deliberate:
+# the game launched 2026-07-29 and its UI will move. When a patch redesigns a
+# screen, redraw the boxes here -- nothing in Python needs to change.
+#
+# Copy to config/regions.yaml, then see docs/calibration.md for how to read
+# the coordinates off a screenshot.
+
+# The resolution the boxes below were measured at. Boxes are scaled
+# automatically if a session was recorded at a different resolution, so a
+# 1440p calibration keeps working on a 1080p recording.
+source_resolution: [2560, 1440]
+
+# Flip to true once the boxes below are real. While false, the stats stage is
+# skipped and says so, rather than reporting numbers from placeholder boxes.
+calibrated: false
+
+screens:
+  # --- Post-match summary: kills, whether you extracted, anything else shown.
+  post_match:
+    anchor:
+      # A crop of something on this screen that does not change between runs:
+      # a header, a panel corner, a fixed icon. NOT a number.
+      image: anchors/post_match.png
+      # Where to look for it. Narrowing this speeds up the scan and avoids
+      # matching something similar elsewhere on screen.
+      search_box: [880, 120, 800, 240]
+      threshold: 0.82
+    # The screen stays up for a while; ignore re-detections inside this window.
+    debounce_seconds: 45.0
+    fields:
+      kills:
+        box: [1200, 620, 140, 70]
+        type: int
+      survived:
+        box: [1080, 300, 400, 90]
+        type: bool_text
+        # Substring match, case-insensitive -- OCR often picks up decoration
+        # around the word ("- EXTRACTED -").
+        true_when: [EXTRACTED, ESCAPED, SURVIVED]
+        false_when: [DIED, ELIMINATED, KILLED]
+      # Anything else the screen shows. Extra fields are captured and land in
+      # the session summary; add one block per value you want tracked.
+      # damage_dealt:
+      #   box: [1200, 700, 180, 70]
+      #   type: int
+      # time_survived:
+      #   box: [1200, 780, 180, 70]
+      #   type: text
+
+  # --- Stash / inventory screen: the gold endpoints.
+  #
+  # Gold is measured as first-reading vs last-reading, not per match. Two OCR
+  # reads per session instead of one per match, and it captures everything --
+  # deaths, repairs, purchases -- rather than only what a match screen showed.
+  stash:
+    anchor:
+      image: anchors/stash.png
+      search_box: [100, 80, 700, 200]
+      threshold: 0.82
+    debounce_seconds: 20.0
+    fields:
+      stash_value:
+        box: [1900, 140, 260, 60]
+        type: int
+      liquid:
+        box: [1900, 210, 260, 60]
+        type: int
