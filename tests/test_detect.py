@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from vodscrapper.config import AudioDetect, ChatDetect, DetectConfig
+from vodscrapper.config import AudioDetect, ChatDetect, Config, DetectConfig
 from vodscrapper.detect.audio_signal import detect_from_energies, find_quiet_bounds
 from vodscrapper.detect.chat_signal import build_bins, detect_chat_spikes, rolling_z_scores
+from vodscrapper.detect.llm import build_system_prompt
 from vodscrapper.detect.merge import merge_candidates, rank_candidates
 from vodscrapper.models import Candidate, ChatMessage, Source
 
@@ -227,3 +228,41 @@ def test_marker_category_survives_a_merge():
         600.0,
     )[0]
     assert merged.category is Category.BIG_PLAY
+
+
+class TestRerankerPrompt:
+    """The reranker must never be told the wrong game.
+
+    A prompt that confidently describes an extraction shooter while the
+    transcript is football commentary invites the model to invent events it
+    cannot see -- which is the one thing the prompt explicitly forbids.
+    """
+
+    def test_named_game_appears_in_the_prompt(self):
+        config = Config()
+        prompt = build_system_prompt(config.games["fc26"].description)
+        assert "football" in prompt.lower()
+        assert "extraction" not in prompt.lower()
+
+    def test_each_game_gets_its_own_description(self):
+        config = Config()
+        rust = build_system_prompt(config.games["rust"].description)
+        mistfall = build_system_prompt(config.games["mistfall"].description)
+        assert rust != mistfall
+        assert "survival sandbox" in rust.lower()
+        assert "extraction" in mistfall.lower()
+
+    def test_no_game_selected_stays_generic_rather_than_guessing(self):
+        prompt = build_system_prompt("")
+        for game_word in ("rust", "mistfall", "football", "extraction"):
+            assert game_word not in prompt.lower()
+        assert "variety of games" in prompt.lower()
+
+    def test_blank_description_is_treated_as_no_game(self):
+        assert build_system_prompt("   ") == build_system_prompt("")
+
+    def test_the_judging_rules_survive_in_every_variant(self):
+        for description in ("", Config().games["rust"].description):
+            prompt = build_system_prompt(description)
+            assert "do not invent events" in prompt
+            assert "JSON object" in prompt

@@ -253,6 +253,26 @@ class RenderConfig:
 
 
 @dataclass
+class GameProfile:
+    """One game's own settings.
+
+    Games are kept apart rather than merged because almost nothing carries
+    between them: the summary screens differ, the vocabulary differs, and a
+    prompt describing the wrong game actively degrades reranking. Detection
+    tiers 1 and 2 (chat and mic energy) are genuinely game-agnostic and stay
+    shared.
+    """
+
+    label: str = ""
+    # Fed to the LLM reranker so it knows what it is looking at. Left blank,
+    # the prompt stays generic rather than naming the wrong game.
+    description: str = ""
+    # Which section of regions.yaml holds this game's screens. Defaults to
+    # the profile's own key.
+    regions_key: str = ""
+
+
+@dataclass
 class StatsConfig:
     enabled: bool = True
     regions_file: str = "config/regions.yaml"
@@ -287,6 +307,40 @@ class UIConfig:
 
 @dataclass
 class Config:
+    # The active game. Deliberately blank by default: there is no house game,
+    # and guessing wrong silently mis-reads summary screens and mis-prompts
+    # the reranker. Commands that need it ask, or take --game.
+    game: str = ""
+    games: dict[str, GameProfile] = field(
+        default_factory=lambda: {
+            "rust": GameProfile(
+                label="Rust",
+                description=(
+                    "A hardcore multiplayer survival sandbox: players gather "
+                    "resources, build and raid bases, and fight over loot on a "
+                    "persistent wipe-cycle server. Losing a base or a kit is as "
+                    "postable as taking one."
+                ),
+            ),
+            "mistfall": GameProfile(
+                label="Mistfall Hunter",
+                description=(
+                    "A dark-fantasy PvPvE extraction ARPG: players drop in, "
+                    "fight monsters and rival squads for loot, and only keep "
+                    "what they carry out through an extraction point. Losing a "
+                    "full kit is as postable as winning one."
+                ),
+            ),
+            "fc26": GameProfile(
+                label="EA Sports FC 26",
+                description=(
+                    "A football simulation played in matches against other "
+                    "players. Goals, near-misses, comebacks and refereeing "
+                    "decisions are the postable moments."
+                ),
+            ),
+        }
+    )
     paths: Paths = field(default_factory=Paths)
     twitch: TwitchConfig = field(default_factory=TwitchConfig)
     tracks: AudioTracks = field(default_factory=AudioTracks)
@@ -296,6 +350,22 @@ class Config:
     stats: StatsConfig = field(default_factory=StatsConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
     ui: UIConfig = field(default_factory=UIConfig)
+
+    @property
+    def profile(self) -> GameProfile | None:
+        """The active game's profile, or None when no game is selected."""
+        return self.games.get(self.game) if self.game else None
+
+    @property
+    def regions_key(self) -> str:
+        """Which section of regions.yaml the active game reads."""
+        profile = self.profile
+        if profile and profile.regions_key:
+            return profile.regions_key
+        return self.game
+
+    def known_games(self) -> list[str]:
+        return sorted(self.games)
 
     @property
     def oauth_token(self) -> str:

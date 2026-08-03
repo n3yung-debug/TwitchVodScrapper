@@ -268,8 +268,15 @@ def check_llm(config: Config, report: Report) -> None:
 def check_calibration(config: Config, report: Report) -> None:
     from .stats.regions import load_regions
 
-    if config.stats.enabled:
-        regions = load_regions(config.stats.regions_file)
+    if config.stats.enabled and not config.game:
+        report.add(
+            "game", WARN,
+            "no active game selected, so screen regions cannot be checked",
+            "Pass --game, or set 'game:' in the config. See 'vodscrap games'.",
+        )
+    elif config.stats.enabled:
+        report.add("game", OK, config.game)
+        regions = load_regions(config.stats.regions_file, game=config.game)
         if regions.calibrated:
             missing = [
                 name for name in ("post_match", "stash") if name not in regions.screens
@@ -296,9 +303,11 @@ def check_calibration(config: Config, report: Report) -> None:
         else:
             report.add(
                 "regions", WARN,
-                f"{config.stats.regions_file} is not calibrated -- no kills, "
-                "extract rate, or gold tracking",
-                "vodscrap calibrate grid --at <seconds>, then docs/calibration.md",
+                f"no calibrated regions for '{config.game}' in "
+                f"{config.stats.regions_file} -- no post-match stats for this game"
+                + (f" (sections present: {', '.join(regions.offered)})" if regions.offered else ""),
+                f"vodscrap calibrate grid --game {config.game} --at <seconds>, "
+                "then docs/calibration.md",
             )
 
     facecam = config.render.vertical.facecam

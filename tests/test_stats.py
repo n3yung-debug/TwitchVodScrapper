@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import textwrap
+
 import json
 
 import pytest
@@ -10,7 +12,7 @@ from vodscrapper.config import Config, StatsConfig
 from vodscrapper.models import MatchResult, WealthReading
 from vodscrapper.retention import find_prunable, prune
 from vodscrapper.stats.ocr import parse_bool, parse_number
-from vodscrapper.stats.regions import Box, Field, load_regions
+from vodscrapper.stats.regions import available_games, Box, Field, load_regions
 from vodscrapper.stats.summary import build_summary, format_summary, result_candidates
 
 
@@ -248,3 +250,95 @@ def test_find_prunable_explains_why_each_file_is_kept(tmp_path):
     _make_recording(tmp_path, "2026-08-01 19-00-00.mkv", age_days=2)
     reasons = [c.reason for c in find_prunable(_config(tmp_path))]
     assert any("days old" in r for r in reasons)
+
+
+class TestPerGameRegions:
+    """Regions are stored per game because nothing about them transfers.
+
+    Reading one game's boxes against another game's frame produces confident
+    nonsense rather than an error, so selecting the wrong section -- or no
+    section -- has to be visible.
+    """
+
+    FILE = textwrap.dedent("""
+        games:
+          rust:
+            source_resolution: [2560, 1440]
+            calibrated: true
+            screens:
+              post_match:
+                anchor:
+                  image: anchors/rust.png
+                fields:
+                  kills:
+                    box: [100, 100, 80, 40]
+          fc26:
+            source_resolution: [1920, 1080]
+            calibrated: true
+            screens:
+              post_match:
+                anchor:
+                  image: anchors/fc26.png
+                fields:
+                  goals:
+                    box: [900, 300, 60, 40]
+    """)
+
+    def write(self, tmp_path):
+        path = tmp_path / "regions.yaml"
+        path.write_text(self.FILE, encoding="utf-8")
+        return path
+
+    def test_each_game_loads_its_own_section(self, tmp_path):
+        path = self.write(tmp_path)
+        rust = load_regions(path, game="rust")
+        fc26 = load_regions(path, game="fc26")
+
+        assert rust.calibrated and fc26.calibrated
+        assert rust.source_resolution == (2560, 1440)
+        assert fc26.source_resolution == (1920, 1080)
+        assert [f.name for f in rust.post_match.fields] == ["kills"]
+        assert [f.name for f in fc26.post_match.fields] == ["goals"]
+
+    def test_no_game_selected_loads_nothing_and_reports_the_options(self, tmp_path):
+        regions = load_regions(self.write(tmp_path), game="")
+        assert not regions.calibrated
+        assert regions.screens == {}
+        assert regions.offered == ["fc26", "rust"]
+
+    def test_unknown_game_reports_the_options_rather_than_falling_back(self, tmp_path):
+        regions = load_regions(self.write(tmp_path), game="mistfall")
+        assert not regions.calibrated
+        assert regions.screens == {}
+        assert regions.offered == ["fc26", "rust"]
+
+    def test_available_games_lists_the_sections(self, tmp_path):
+        assert available_games(self.write(tmp_path)) == ["fc26", "rust"]
+
+    def test_a_missing_file_is_not_an_error(self, tmp_path):
+        regions = load_regions(tmp_path / "nope.yaml", game="rust")
+        assert not regions.calibrated
+        assert available_games(tmp_path / "nope.yaml") == []
+
+    def test_older_flat_file_still_loads(self, tmp_path):
+        # Files written before regions were split per game have screens at
+        # the top level; they should keep working rather than silently
+        # reporting nothing calibrated.
+        path = tmp_path / "flat.yaml"
+        path.write_text(
+            textwrap.dedent("""
+                source_resolution: [2560, 1440]
+                calibrated: true
+                screens:
+                  post_match:
+                    anchor:
+                      image: anchors/x.png
+                    fields:
+                      kills:
+                        box: [100, 100, 80, 40]
+            """),
+            encoding="utf-8",
+        )
+        regions = load_regions(path, game="anything")
+        assert regions.calibrated
+        assert [f.name for f in regions.post_match.fields] == ["kills"]

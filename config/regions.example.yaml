@@ -1,69 +1,126 @@
-# OCR calibration for Mistfall Hunter's summary screens.
+# OCR calibration, one section per game.
+#
+# Nothing here transfers between games: a football full-time screen and an
+# extraction summary share no geometry, no fields, and no anchor. So each game
+# gets its own section, they coexist, and the active one is chosen explicitly
+# with `game:` in config.yaml or `--game` on the command line. There is no
+# default game -- guessing would read one game's boxes against another game's
+# frame, which produces confident nonsense rather than an error.
 #
 # Every number here comes from a screenshot, not from code. That is deliberate:
-# the game launched 2026-07-29 and its UI will move. When a patch redesigns a
-# screen, redraw the boxes here -- nothing in Python needs to change.
+# these games patch their UIs, and when one moves the fix is redrawing boxes
+# here. Nothing in Python changes.
 #
-# Copy to config/regions.yaml, then see docs/calibration.md for how to read
-# the coordinates off a screenshot.
+# Copy to config/regions.yaml, then:
+#   vodscrap games                              # what is configured, and its state
+#   vodscrap calibrate grid --game rust --at 1800
+#   vodscrap calibrate crop --game rust --at 1800 --box 1200,620,140,70
+#   vodscrap calibrate check --game rust --at 1800
+#
+# See docs/calibration.md for the full walkthrough.
 
-# The resolution the boxes below were measured at. Boxes are scaled
-# automatically if a session was recorded at a different resolution, so a
-# 1440p calibration keeps working on a 1080p recording.
-source_resolution: [2560, 1440]
+games:
 
-# Flip to true once the boxes below are real. While false, the stats stage is
-# skipped and says so, rather than reporting numbers from placeholder boxes.
-calibrated: false
+  # ---------------------------------------------------------------- Rust ---
+  rust:
+    # The resolution these boxes were measured at. Boxes are scaled
+    # automatically if a session was recorded at a different resolution, so a
+    # 1440p calibration keeps working on a 1080p recording.
+    source_resolution: [2560, 1440]
+    # Flip to true once the boxes below are real. While false, the stats stage
+    # is skipped for this game and says so, rather than reporting numbers read
+    # from placeholder boxes.
+    calibrated: false
+    screens:
+      # Rust has no per-match summary screen the way an extraction game does.
+      # What is worth reading is situational -- a death screen, the map, the
+      # team UI. Start with whatever you actually want counted and add
+      # sections as you go; anything not listed here is simply not read.
+      #
+      # death:
+      #   anchor:
+      #     image: anchors/rust_death.png
+      #     search_box: [880, 120, 800, 240]
+      #   fields:
+      #     killed_by:
+      #       box: [1000, 600, 560, 70]
+      #       type: text
 
-screens:
-  # --- Post-match summary: kills, whether you extracted, anything else shown.
-  post_match:
-    anchor:
-      # A crop of something on this screen that does not change between runs:
-      # a header, a panel corner, a fixed icon. NOT a number.
-      image: anchors/post_match.png
-      # Where to look for it. Narrowing this speeds up the scan and avoids
-      # matching something similar elsewhere on screen.
-      search_box: [880, 120, 800, 240]
-      threshold: 0.82
-    # The screen stays up for a while; ignore re-detections inside this window.
-    debounce_seconds: 45.0
-    fields:
-      kills:
-        box: [1200, 620, 140, 70]
-        type: int
-      survived:
-        box: [1080, 300, 400, 90]
-        type: bool_text
-        # Substring match, case-insensitive -- OCR often picks up decoration
-        # around the word ("- EXTRACTED -").
-        true_when: [EXTRACTED, ESCAPED, SURVIVED]
-        false_when: [DIED, ELIMINATED, KILLED]
-      # Anything else the screen shows. Extra fields are captured and land in
-      # the session summary; add one block per value you want tracked.
-      # damage_dealt:
-      #   box: [1200, 700, 180, 70]
-      #   type: int
-      # time_survived:
-      #   box: [1200, 780, 180, 70]
-      #   type: text
+  # ------------------------------------------------------ Mistfall Hunter ---
+  mistfall:
+    source_resolution: [2560, 1440]
+    calibrated: false
+    screens:
+      # --- Post-match summary: kills, whether you extracted, anything else.
+      post_match:
+        anchor:
+          # A crop of something on this screen that does not change between
+          # runs: a header, a panel corner, a fixed icon. NOT a number.
+          image: anchors/mistfall_post_match.png
+          # Where to look for it. Narrowing this speeds up the scan and avoids
+          # matching something similar elsewhere on screen.
+          search_box: [880, 120, 800, 240]
+          threshold: 0.82
+        # The screen stays up for a while; ignore re-detections inside this.
+        debounce_seconds: 45.0
+        fields:
+          kills:
+            box: [1200, 620, 140, 70]
+            type: int
+          survived:
+            box: [1080, 300, 400, 90]
+            type: bool_text
+            # Substring match, case-insensitive -- OCR often picks up
+            # decoration around the word ("- EXTRACTED -").
+            true_when: [EXTRACTED, ESCAPED, SURVIVED]
+            false_when: [DIED, ELIMINATED, KILLED]
+          # Anything else the screen shows. Extra fields are captured and land
+          # in the session summary; add one block per value you want tracked.
+          # damage_dealt:
+          #   box: [1200, 700, 180, 70]
+          #   type: int
 
-  # --- Stash / inventory screen: the gold endpoints.
-  #
-  # Gold is measured as first-reading vs last-reading, not per match. Two OCR
-  # reads per session instead of one per match, and it captures everything --
-  # deaths, repairs, purchases -- rather than only what a match screen showed.
-  stash:
-    anchor:
-      image: anchors/stash.png
-      search_box: [100, 80, 700, 200]
-      threshold: 0.82
-    debounce_seconds: 20.0
-    fields:
-      stash_value:
-        box: [1900, 140, 260, 60]
-        type: int
-      liquid:
-        box: [1900, 210, 260, 60]
-        type: int
+      # --- Stash / inventory screen: the gold endpoints.
+      #
+      # Gold is measured as first-reading vs last-reading, not per match. Two
+      # OCR reads per session instead of one per match, and it captures
+      # everything -- deaths, repairs, purchases -- rather than only what a
+      # match screen showed.
+      stash:
+        anchor:
+          image: anchors/mistfall_stash.png
+          search_box: [100, 80, 700, 200]
+          threshold: 0.82
+        debounce_seconds: 20.0
+        fields:
+          stash_value:
+            box: [1900, 140, 260, 60]
+            type: int
+          liquid:
+            box: [1900, 210, 260, 60]
+            type: int
+
+  # ------------------------------------------------------ EA Sports FC 26 ---
+  fc26:
+    source_resolution: [2560, 1440]
+    calibrated: false
+    screens:
+      # Full-time screen. Note the field names differ from the extraction
+      # games entirely -- goals, not kills. Fields the summary does not know
+      # about are still captured and land in MatchResult.extra, so you can
+      # track them without the schema having to grow first.
+      #
+      # full_time:
+      #   anchor:
+      #     image: anchors/fc26_full_time.png
+      #     search_box: [880, 120, 800, 240]
+      #   fields:
+      #     goals_for:
+      #       box: [1100, 400, 120, 80]
+      #       type: int
+      #     goals_against:
+      #       box: [1400, 400, 120, 80]
+      #       type: int
+      #     possession:
+      #       box: [1200, 700, 140, 60]
+      #       type: int

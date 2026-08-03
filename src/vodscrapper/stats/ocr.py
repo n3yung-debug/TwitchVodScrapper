@@ -1,7 +1,7 @@
 """Reading calibrated fields out of a frame.
 
 PaddleOCR is the default engine rather than Tesseract because game UIs use
-stylised, decorative type that Tesseract handles poorly, and Mistfall Hunter
+stylised, decorative type that Tesseract handles poorly, and game UIs
 is dark fantasy.
 
 Each field is cropped and upscaled before recognition. Small stylised numerals

@@ -128,8 +128,9 @@ class MatchResult:
 
     ``extra`` holds any additional fields the summary screen turns out to
     carry once the regions are calibrated from Nick's screenshots -- the
-    schema deliberately does not hard-code the full field list, because the
-    game is new and its summary screen will change.
+    schema deliberately does not hard-code the full field list. That is what
+    lets a game whose summary looks nothing like the others (goals rather
+    than kills, say) be tracked without changing this file first.
     """
 
     at_offset: float
@@ -168,6 +169,11 @@ class WealthReading:
 @dataclass
 class SessionSummary:
     """End-of-session stats.
+
+    The field names here are shaped by extraction games (kills, extracted,
+    died, stash value). Games that do not work that way put their numbers in
+    ``MatchResult.extra`` instead, so a new game does not need the schema to
+    grow before it can be tracked.
 
     Gold is reported as endpoints plus a delta rather than a single number.
     Stash "value" in an extraction game is an estimated market price and

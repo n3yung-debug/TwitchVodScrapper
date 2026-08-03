@@ -10,6 +10,26 @@ from .config import Config, dump_default_config, load_config
 from .ingest.recording import find_recordings, latest_recording
 
 
+def _load(args: argparse.Namespace) -> Config:
+    """Load config and apply the --game override.
+
+    The game is never inferred. Nick plays several and they coexist; a
+    wrong guess reads another game's screen regions and prompts the
+    reranker with the wrong genre, both of which fail quietly.
+    """
+    config = load_config(args.config)
+    game = getattr(args, "game", None)
+    if game:
+        if game not in config.games:
+            raise SystemExit(
+                f"unknown game {game!r}. Known: "
+                f"{', '.join(config.known_games()) or 'none configured'}. "
+                "Add it under 'games:' in the config."
+            )
+        config.game = game
+    return config
+
+
 def _resolve_recording(config: Config, given: str | None):
     if given:
         from .ingest.recording import load_recording
@@ -38,7 +58,7 @@ def cmd_init(args: argparse.Namespace) -> int:
 def cmd_daemon(args: argparse.Namespace) -> int:
     from .markers.daemon import MarkerDaemon, run_tray
 
-    config = load_config(args.config)
+    config = _load(args)
     if args.no_tray:
         MarkerDaemon(config).run_forever()
     else:
@@ -47,7 +67,7 @@ def cmd_daemon(args: argparse.Namespace) -> int:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
+    config = _load(args)
     recordings = find_recordings(config.paths.recordings_dir, ffprobe=config.paths.ffprobe)
     if not recordings:
         print(f"no recordings in {config.paths.recordings_dir}")
@@ -65,7 +85,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 def cmd_analyze(args: argparse.Namespace) -> int:
     from .pipeline import analyze, format_report, session_file
 
-    config = load_config(args.config)
+    config = _load(args)
     recording = _resolve_recording(config, args.recording)
     print(f"analysing {recording.name} ...")
     result = analyze(config, recording.path)
@@ -81,7 +101,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     from .pipeline import session_file
     from .ui import serve
 
-    config = load_config(args.config)
+    config = _load(args)
     if args.session:
         path = Path(args.session)
     else:
@@ -98,7 +118,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
     from .models import MatchResult, SessionSummary, WealthReading
     from .stats.summary import format_summary
 
-    config = load_config(args.config)
+    config = _load(args)
     if args.session:
         path = Path(args.session)
     else:
@@ -142,7 +162,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
 def cmd_remux(args: argparse.Namespace) -> int:
     from .media import remux
 
-    config = load_config(args.config)
+    config = _load(args)
     src = Path(args.input)
     dest = Path(args.output) if args.output else src.with_suffix(".mp4")
     print(f"remuxing {src.name} -> {dest.name} (no re-encode)")
@@ -154,7 +174,7 @@ def cmd_remux(args: argparse.Namespace) -> int:
 def cmd_prune(args: argparse.Namespace) -> int:
     from .retention import find_prunable, prune
 
-    config = load_config(args.config)
+    config = _load(args)
     if args.all:
         for candidate in find_prunable(config):
             mark = "DELETE" if candidate.age_days >= config.retention.raw_recording_days and (
@@ -176,13 +196,48 @@ def cmd_prune(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_games(args: argparse.Namespace) -> int:
+    """Show the configured games and how far each one is calibrated."""
+    from .stats.regions import load_regions
+
+    config = _load(args)
+    if not config.games:
+        print("no games configured. Add them under 'games:' in the config.")
+        return 1
+
+    active = config.game
+    print(f"regions file: {config.stats.regions_file}\n")
+    for key in config.known_games():
+        profile = config.games[key]
+        regions = load_regions(config.stats.regions_file, game=key)
+        if regions.calibrated:
+            state = f"{len(regions.screens)} screen(s) at " \
+                    f"{regions.source_resolution[0]}x{regions.source_resolution[1]}"
+        elif regions.offered and key not in regions.offered:
+            state = "no section in the regions file"
+        else:
+            state = "not calibrated"
+        mark = "*" if key == active else " "
+        print(f" {mark} {key:<10s} {profile.label or key:<20s} {state}")
+
+    print()
+    if active:
+        print(f"active game: {active} (from {'--game' if args.game else 'config'})")
+    else:
+        print(
+            "no active game. Pass --game, or set 'game:' in the config -- it is "
+            "deliberately unset, since guessing reads the wrong screen regions."
+        )
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Check everything that can be checked before it costs a stream."""
     from .doctor import format_report, run_checks
     from .config import DEFAULT_CONFIG_PATH
 
     config_path = Path(args.config) if args.config else DEFAULT_CONFIG_PATH
-    config = load_config(args.config)
+    config = _load(args)
     report = run_checks(config, config_path, online=args.online)
     print(format_report(report))
     return 1 if report.failed else 0
@@ -212,7 +267,7 @@ def cmd_clip(args: argparse.Namespace) -> int:
     )
     from .pipeline import load_session
 
-    config = load_config(args.config)
+    config = _load(args)
     path = _session_path(config, args)
     if not path.exists():
         raise SystemExit(f"no session at {path}; run 'vodscrap analyze' first")
@@ -331,9 +386,11 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
     )
     from .media import MediaError
 
-    config = load_config(args.config)
+    config = _load(args)
     recording = _resolve_recording(config, args.recording)
     out_dir = Path(args.out_dir) if args.out_dir else Path(config.paths.work_dir) / "calibration"
+    if config.game:
+        out_dir = out_dir / config.game
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = f"{int(args.at):06d}"
 
@@ -357,7 +414,8 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
         print(f"  {dest}")
         print(
             f"\nRead x,y,w,h off the grid ({args.step}px cells, labelled every "
-            f"{args.step * 5}px), then fill in {config.stats.regions_file} "
+            f"{args.step * 5}px), then fill them in under "
+            f"games.{config.game or '<game>'} in {config.stats.regions_file}, "
             f"with source_resolution: [{resolution[0]}, {resolution[1]}].\n"
             "Confirm a box with:  vodscrap calibrate crop --at "
             f"{int(args.at)} --box x,y,w,h"
@@ -404,7 +462,7 @@ def cmd_verify_clip_offset(args: argparse.Namespace) -> int:
     """
     from .ingest.twitch import TwitchClient
 
-    config = load_config(args.config)
+    config = _load(args)
     if not config.twitch.client_id or not config.oauth_token:
         raise SystemExit(
             "needs twitch.client_id and the OAuth token env var "
@@ -452,6 +510,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="Turn a Twitch stream into clips worth posting.",
     )
     parser.add_argument("--config", default=None, help="path to config.yaml")
+    parser.add_argument(
+        "--game",
+        help="which game this recording is (see 'vodscrap games'); "
+             "overrides 'game:' in the config",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("init", help="write a default config file")
@@ -489,6 +552,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--delete", action="store_true", help="actually delete (default is a dry run)")
     p.add_argument("--all", action="store_true", help="show every recording and why it is kept")
     p.set_defaults(func=cmd_prune)
+
+    p = sub.add_parser("games", help="list the configured games and their calibration state")
+    p.set_defaults(func=cmd_games)
 
     p = sub.add_parser("doctor", help="check the install, paths, credentials and calibration")
     p.add_argument(

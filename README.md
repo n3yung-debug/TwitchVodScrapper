@@ -3,8 +3,10 @@
 Turns a Twitch stream into clips worth posting: hotkey markers while you play,
 a detection pass afterwards, a local review UI, and rendered files in a folder.
 
-Built for Mistfall Hunter on a 9800X3D / RTX 5070 Ti, Windows, Streamlabs
-Desktop. Nothing is posted automatically — the last step is always yours.
+Built for a 9800X3D / RTX 5070 Ti on Windows with Streamlabs Desktop.
+Multi-game: Rust, Mistfall Hunter and FC 26 coexist, each with its own screen
+regions, and the active one is always chosen explicitly. Nothing is posted
+automatically — the last step is always yours.
 
 ---
 
@@ -78,6 +80,7 @@ vodscrap review
 | Command | What it does |
 |---|---|
 | `vodscrap init` | Write a default config |
+| `vodscrap games` | Configured games and how far each is calibrated |
 | `vodscrap doctor` | Check install, paths, credentials, calibration |
 | `vodscrap daemon` | Hotkey marker daemon with a tray icon |
 | `vodscrap list` | Recordings found on disk |
@@ -89,6 +92,36 @@ vodscrap review
 | `vodscrap remux <file>` | Lossless MKV → MP4 |
 | `vodscrap prune` | Delete old, already-reviewed recordings (dry run by default) |
 | `vodscrap verify-clip-offset` | Settles Twitch's `vod_offset` ambiguity — run once |
+
+---
+
+## Games
+
+Several games coexist. What's shared and what isn't falls out cleanly:
+
+| Shared across every game | Per game |
+|---|---|
+| Hotkey markers, chat velocity, mic energy | OCR screen regions and anchors |
+| Merge/ranking, review UI, render, clips | The genre description sent to the reranker |
+| Retention, timing, calibration tooling | What a "match result" even means |
+
+Tiers 0–2 don't care what you're playing. Tier 4 cares entirely.
+
+```
+vodscrap games                        # what's configured, and its state
+vodscrap analyze --game rust
+vodscrap calibrate grid --game fc26 --at 1800
+```
+
+Set `game:` in the config for whatever you play most, and pass `--game` when
+it's something else. **There is no default and nothing is inferred** — a wrong
+guess reads another game's boxes and prompts the reranker with the wrong
+genre, and both fail quietly rather than erroring. With no game selected,
+detection still runs on markers, chat and mic; only the OCR stage sits out,
+and it says so.
+
+Adding a game is two edits, no code: a `games:` entry in `config.yaml` (label
+and a one-line genre description) and a section in `regions.yaml`.
 
 ---
 
@@ -217,11 +250,12 @@ renders.
   away the exact in/out points you chose. Opt in for rough cuts.
 - **Retention never deletes an unreviewed recording.** The VOD may already
   have expired, making the local file the only copy.
-- **Game-HUD OCR is deliberately limited to the two summary screens.** Mistfall
-  Hunter launched 2026-07-29; live combat HUD templates would break on the
-  first balance patch. Summary screens are static, high-contrast, and persist
-  for seconds — and their geometry lives in YAML, so a patch means redrawing
-  boxes, not editing code.
+- **Game-HUD OCR is deliberately limited to summary screens.** Live combat
+  HUD templates would break on the first balance patch. Summary screens are
+  static, high-contrast, and persist for seconds — and their geometry lives in
+  YAML, so a patch means redrawing boxes, not editing code.
+- **There is no default game.** Guessing reads one game's boxes against
+  another's frame, which produces confident nonsense rather than an error.
 - **Twitch Dual Format is not used.** It works, but it would cost horizontal
   stream bitrate and lock vertical framing at stream time, in exchange for a
   6 Mbps source when the local recording is 30–40. Reasoning in

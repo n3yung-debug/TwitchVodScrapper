@@ -15,7 +15,10 @@ files and native Twitch clips. **Nothing is ever posted automatically** — the
 final publish step is always Nick's. Do not add auto-upload.
 
 Target machine: 9800X3D / RTX 5070 Ti, Windows, Streamlabs Desktop.
-Game of record: **Mistfall Hunter** (launched 2026-07-29).
+
+**There is no house game.** Nick plays several and they coexist — see the
+per-game sections below. Never assume one; if a task is game-specific and the
+game isn't stated, ask which one.
 
 ---
 
@@ -49,9 +52,14 @@ Game of record: **Mistfall Hunter** (launched 2026-07-29).
    have expired, which makes the local file the only copy.
 
 7. **Calibrated geometry lives in YAML, never in Python.** OCR boxes
-   (`config/regions.yaml`) and the facecam box are read off screenshots. The
-   game is new and its UI will move; a patch must mean redrawing boxes, not
-   editing code.
+   (`config/regions.yaml`) and the facecam box are read off screenshots. These
+   games patch their UIs; a patch must mean redrawing boxes, not editing code.
+
+8. **No game is ever inferred.** `config.game` defaults to blank, and every
+   game-dependent path either takes an explicit `--game` or degrades and says
+   so. Guessing reads one game's boxes against another's frame and prompts the
+   reranker with the wrong genre — both produce confident nonsense rather than
+   an error, which is the worst possible failure mode here.
 
 ---
 
@@ -80,6 +88,34 @@ Game of record: **Mistfall Hunter** (launched 2026-07-29).
 
 ---
 
+## Games
+
+Shared across all games: markers, chat velocity, mic energy, merge/ranking,
+review UI, render, clips, retention. Per game: OCR regions, the reranker's
+genre description, and what a "match result" means at all.
+
+Adding a game is config-only — a `games:` entry in `config.yaml` and a section
+under `games:` in `regions.yaml`. No code.
+
+### Rust
+Survival sandbox, wipe cycles, base building and raiding. No per-match summary
+screen the way an extraction game has one, so tier 4 has little to read —
+what's worth OCR'ing is situational and currently uncalibrated.
+
+### Mistfall Hunter
+PvPvE extraction ARPG, launched 2026-07-29. The game the stats schema was
+originally shaped around: `post_match` (kills, survived) and `stash` (stash
+value, liquid) screens. Gold is read as first/last endpoints plus a delta,
+never per match. Uncalibrated.
+
+### EA Sports FC 26
+Football. Its full-time screen shares nothing with the extraction games —
+goals, not kills. Fields the summary schema doesn't know about land in
+`MatchResult.extra`, so it can be tracked without the schema growing first.
+Uncalibrated.
+
+---
+
 ## Open items
 
 - **`twitch.vod_offset_is_start` is unvalidated (PENDING VALIDATION).**
@@ -89,10 +125,15 @@ Game of record: **Mistfall Hunter** (launched 2026-07-29).
   documentation. `vodscrap verify-clip-offset` creates one throwaway clip to
   settle it. Until Nick has run it, `vodscrap clip` prints a reminder on every
   run and `doctor` reports it as a warning. **Do not quietly pick a side.**
-- **OCR regions are not calibrated.** `config/regions.yaml` ships
-  uncalibrated, so the stats stage skips itself and says so. Needs Nick's
-  screenshots of the post-match and stash screens. `vodscrap calibrate` exists
-  to read the coordinates off a real frame.
+- **No game's OCR regions are calibrated.** `config/regions.yaml` ships with
+  every section uncalibrated, so the stats stage skips itself per game and
+  says so. `vodscrap calibrate --game <game>` reads coordinates off a real
+  frame; `vodscrap games` shows the state of each.
+- **The session summary schema is extraction-shaped** (kills, extracted, died,
+  stash/liquid gold). It fits Mistfall Hunter, roughly fits Rust, and does not
+  fit FC 26. `MatchResult.extra` is the escape hatch for now. Whether this
+  should generalise is an open question for Nick, not something to decide
+  unilaterally.
 - **The facecam box is a placeholder** (`480x270` at `24,1146`, assuming
   2560x1440). Vertical renders crop the wrong area until it is measured.
 

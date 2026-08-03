@@ -229,7 +229,7 @@ def collect_configured_boxes(config, resolution: tuple[int, int]) -> list[tuple[
     from .stats.regions import load_regions
 
     out: list[tuple[str, Box]] = []
-    regions = load_regions(config.stats.regions_file)
+    regions = load_regions(config.stats.regions_file, game=config.game)
     fx, fy = regions.scale_for(resolution)
     for screen in regions.screens.values():
         if screen.anchor.search_box:

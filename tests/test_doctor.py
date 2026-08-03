@@ -39,6 +39,7 @@ def base_config(tmp_path) -> Config:
     config.paths.output_dir = str(tmp_path / "out")
     config.paths.markers_file = str(tmp_path / "markers.jsonl")
     config.stats.regions_file = str(tmp_path / "regions.yaml")
+    config.game = "mistfall"
     return config
 
 
@@ -160,21 +161,23 @@ class TestCalibration:
         config = base_config(tmp_path)
         (tmp_path / "regions.yaml").write_text(
             textwrap.dedent("""
-                source_resolution: [2560, 1440]
-                calibrated: true
-                screens:
-                  post_match:
-                    anchor:
-                      image: anchors/post_match.png
-                    fields:
-                      kills:
-                        box: [1200, 620, 140, 70]
-                  stash:
-                    anchor:
-                      image: anchors/stash.png
-                    fields:
-                      stash_value:
-                        box: [1900, 140, 260, 60]
+                games:
+                  mistfall:
+                    source_resolution: [2560, 1440]
+                    calibrated: true
+                    screens:
+                      post_match:
+                        anchor:
+                          image: anchors/post_match.png
+                        fields:
+                          kills:
+                            box: [1200, 620, 140, 70]
+                      stash:
+                        anchor:
+                          image: anchors/stash.png
+                        fields:
+                          stash_value:
+                            box: [1900, 140, 260, 60]
             """),
             encoding="utf-8",
         )
@@ -182,6 +185,21 @@ class TestCalibration:
         check_calibration(config, report)
         assert status_for(report, "regions") == OK
         assert status_for(report, "anchor:post_match") == FAIL
+
+    def test_no_game_selected_warns_instead_of_checking_regions(self, tmp_path):
+        # Guessing a game here would check the wrong screens and report a
+        # confident OK, which is worse than saying nothing is selected.
+        config = base_config(tmp_path)
+        config.game = ""
+        report = Report()
+        check_calibration(config, report)
+        assert status_for(report, "game") == WARN
+        assert "regions" not in names(report)
+
+    def test_selected_game_is_reported(self, tmp_path):
+        report = Report()
+        check_calibration(base_config(tmp_path), report)
+        assert status_for(report, "game") == OK
 
     def test_stats_disabled_skips_region_checks_entirely(self, tmp_path):
         config = base_config(tmp_path)

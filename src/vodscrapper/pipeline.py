@@ -38,6 +38,7 @@ class AnalysisResult:
     candidates: list[Candidate] = field(default_factory=list)
     summary: SessionSummary | None = None
     warnings: list[str] = field(default_factory=list)
+    game: str = ""
     vod_id: str = ""
     # Recorded so that native clip creation can convert recording offsets to
     # VOD offsets later without re-querying Twitch -- and so it still works
@@ -54,6 +55,7 @@ class AnalysisResult:
             "recording_start_utc": self.recording.start_utc.isoformat(),
             "duration": self.recording.duration,
             "resolution": list(self.recording.resolution or (0, 0)),
+            "game": self.game,
             "vod_id": self.vod_id,
             "vod_start_utc": self.vod_start_utc.isoformat() if self.vod_start_utc else None,
             "vod_duration": self.vod_duration,
@@ -153,12 +155,25 @@ def _gather_stats(
     if not config.stats.enabled:
         return None, []
 
-    regions = load_regions(config.stats.regions_file)
-    if not regions.calibrated:
+    if not config.game:
         warnings.append(
-            "post-match stats skipped: no calibrated regions. Add screenshots "
-            f"and fill in {config.stats.regions_file} to enable kills, "
-            "extract rate, and gold tracking."
+            "post-match stats skipped: no game selected, so there is no way to "
+            "know which set of screen regions to read. Pass --game, or set "
+            f"'game:' in the config. Known: {', '.join(config.known_games()) or 'none'}."
+        )
+        return None, []
+
+    regions = load_regions(config.stats.regions_file, game=config.game)
+    if not regions.calibrated:
+        detail = (
+            f"'{config.game}' has no section in {config.stats.regions_file}"
+            if regions.offered and config.game not in regions.offered
+            else f"the '{config.game}' section is not calibrated"
+        )
+        offered = f" Sections present: {', '.join(regions.offered)}." if regions.offered else ""
+        warnings.append(
+            f"post-match stats skipped: {detail}.{offered} Run "
+            f"'vodscrap calibrate grid --game {config.game}' and fill in the boxes."
         )
         return None, []
 
@@ -200,7 +215,7 @@ def analyze(config: Config, recording_path: str | Path) -> AnalysisResult:
             "two off -- check the trim before rendering"
         )
 
-    result = AnalysisResult(recording=recording, warnings=warnings)
+    result = AnalysisResult(recording=recording, warnings=warnings, game=config.game)
     candidates: list[Candidate] = []
 
     # -- Tier 0: markers. Highest precision by definition.
@@ -280,7 +295,11 @@ def analyze(config: Config, recording_path: str | Path) -> AnalysisResult:
         try:
             from .detect.llm import rerank
 
-            rerank(merged, transcriptions, recording.duration, config.detect.llm)
+            profile = config.profile
+            rerank(
+                merged, transcriptions, recording.duration, config.detect.llm,
+                game_description=profile.description if profile else "",
+            )
         except Exception as exc:
             warnings.append(f"LLM rerank skipped: {exc}")
 

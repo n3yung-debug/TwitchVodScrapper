@@ -25,21 +25,34 @@ from ..models import Candidate, Source
 from ..timing import clamp
 from .transcript import Transcription
 
-_SYSTEM = """You judge whether a moment from a Twitch stream is worth posting \
-as a short-form clip (YouTube Shorts, TikTok).
+_SYSTEM_HEAD = """You judge whether a moment from a Twitch stream is worth \
+posting as a short-form clip (YouTube Shorts, TikTok)."""
 
-The streamer plays Mistfall Hunter, a dark-fantasy PvPvE extraction ARPG: \
-players drop in, fight monsters and rival squads for loot, and only keep what \
-they carry out through an extraction point. Losing a full kit is as postable \
-as winning one. He streams solo and with a group.
-
-You are given a transcript window and the signals that flagged it. Judge only \
-what the transcript and signals support -- do not invent events you cannot \
-see. A moment is worth posting when something actually happens: a big play, a \
-genuinely funny exchange, a dramatic loss, a story worth hearing. Ordinary \
-narration, quiet looting, and menu talk are not.
+_SYSTEM_TAIL = """You are given a transcript window and the signals that \
+flagged it. Judge only what the transcript and signals support -- do not \
+invent events you cannot see. A moment is worth posting when something \
+actually happens: a big play, a genuinely funny exchange, a dramatic loss, a \
+story worth hearing. Ordinary narration, quiet menu talk, and downtime are \
+not.
 
 Return only the JSON object the schema describes."""
+
+# No game is named here. The streamer plays several, and a prompt that
+# confidently describes the wrong one is worse than a prompt that describes
+# none -- it invites the model to read football commentary as an extraction
+# run. The active game's description is injected by the caller, and when
+# there isn't one the prompt simply stays generic.
+_SYSTEM_GENERIC_GAME = """The streamer plays a variety of games. Infer what \
+is happening from the transcript rather than assuming a genre."""
+
+
+def build_system_prompt(game_description: str = "", streams_with_group: bool = True) -> str:
+    """Assemble the reranker's system prompt for the active game."""
+    middle = (game_description or "").strip() or _SYSTEM_GENERIC_GAME
+    if streams_with_group:
+        middle += " He streams solo and with a group."
+    return f"{_SYSTEM_HEAD}\n\n{middle}\n\n{_SYSTEM_TAIL}"
+
 
 _SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -99,8 +112,9 @@ class Judgement:
 
 
 class Reranker:
-    def __init__(self, cfg: LLMDetect):
+    def __init__(self, cfg: LLMDetect, game_description: str = ""):
         self.cfg = cfg
+        self.system = build_system_prompt(game_description)
         self._client = None
 
     def _get_client(self):
@@ -172,7 +186,7 @@ class Reranker:
         request: dict[str, Any] = {
             "model": self.cfg.model,
             "max_tokens": 4096,
-            "system": _SYSTEM,
+            "system": self.system,
             "messages": [
                 {"role": "user", "content": self._build_prompt(candidate, text, window)}
             ],
@@ -233,12 +247,13 @@ def rerank(
     duration: float,
     cfg: LLMDetect,
     tighten: bool = True,
+    game_description: str = "",
 ) -> None:
     """Score, title, and optionally tighten candidates in place."""
     if not cfg.enabled or not candidates:
         return
 
-    reranker = Reranker(cfg)
+    reranker = Reranker(cfg, game_description=game_description)
     for idx, candidate in enumerate(candidates):
         try:
             judgement = reranker.judge(candidate, transcriptions.get(idx))

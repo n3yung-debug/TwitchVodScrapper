@@ -1,9 +1,13 @@
 """Screen and field geometry, calibrated from screenshots.
 
 Every coordinate in this file comes from a screenshot rather than from code.
-That is the whole point: Mistfall Hunter launched at the end of July 2026 and
-its UI will move. When a patch redesigns the summary screen the fix is to
-redraw the boxes in ``config/regions.yaml`` -- not to edit Python.
+That is the whole point: these games patch their UIs, and when one moves the
+fix is to redraw the boxes in ``config/regions.yaml`` -- not to edit Python.
+
+Regions are stored per game under ``games:``. Nothing about them transfers
+between games, and there is no default: reading one game's boxes against
+another game's frame produces confident nonsense rather than an error, so the
+active game is always chosen explicitly.
 
 Boxes are stored against a declared ``source_resolution`` and scaled to
 whatever the recording actually is, so a 1440p calibration keeps working if a
@@ -128,6 +132,11 @@ class RegionConfig:
     screens: dict[str, Screen] = field(default_factory=dict)
     calibrated: bool = False
     base_dir: Path = field(default_factory=lambda: Path("."))
+    # Which game this was loaded for, and which games the file offers --
+    # both carried so a warning can name the actual options instead of
+    # saying "not calibrated" and leaving Nick to open the YAML.
+    game: str = ""
+    offered: list[str] = field(default_factory=list)
 
     def scale_for(self, resolution: tuple[int, int]) -> tuple[float, float]:
         src_w, src_h = self.source_resolution
@@ -146,28 +155,66 @@ class RegionConfig:
         return self.screens.get("stash")
 
 
-def load_regions(path: str | Path) -> RegionConfig:
-    """Load the calibrated region file.
+def available_games(path: str | Path) -> list[str]:
+    """Which games this regions file has sections for."""
+    target = Path(path)
+    if not target.exists():
+        return []
+    with open(target, "r", encoding="utf-8") as fh:
+        raw = yaml.safe_load(fh) or {}
+    return sorted((raw.get("games") or {}).keys())
 
-    A missing or uncalibrated file is not an error -- the rest of the pipeline
-    runs fine without stats, and saying so plainly beats failing the whole
-    session because one screenshot hasn't been taken yet.
+
+def load_regions(path: str | Path, game: str = "") -> RegionConfig:
+    """Load one game's section of the calibrated region file.
+
+    Regions are stored per game because nothing about them transfers: a
+    football match summary and an extraction summary share no geometry, no
+    fields, and no anchor. Keeping them in one file under separate ``games:``
+    keys means one place to look and no chance of reading Rust's boxes
+    against an FC 26 frame.
+
+    A missing file, a missing section, or an uncalibrated one is not an
+    error -- the rest of the pipeline runs fine without stats, and saying so
+    plainly beats failing a whole session because one screenshot hasn't been
+    taken yet.
     """
     target = Path(path)
     if not target.exists():
-        return RegionConfig(calibrated=False, base_dir=target.parent)
+        return RegionConfig(calibrated=False, base_dir=target.parent, game=game)
 
     with open(target, "r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh) or {}
 
-    resolution = raw.get("source_resolution") or [2560, 1440]
+    games = raw.get("games") or {}
+    if games:
+        if not game:
+            # No game selected: report what is on offer rather than guessing
+            # one, which would read the wrong boxes and look like OCR failure.
+            return RegionConfig(
+                calibrated=False, base_dir=target.parent,
+                game="", offered=sorted(games),
+            )
+        section = games.get(game)
+        if section is None:
+            return RegionConfig(
+                calibrated=False, base_dir=target.parent,
+                game=game, offered=sorted(games),
+            )
+    else:
+        # Older single-game file with screens at the top level.
+        section = raw
+
+    resolution = section.get("source_resolution") or [2560, 1440]
     screens = {
         name: Screen.parse(name, cfg)
-        for name, cfg in (raw.get("screens") or {}).items()
+        for name, cfg in (section.get("screens") or {}).items()
     }
     return RegionConfig(
         source_resolution=(int(resolution[0]), int(resolution[1])),
         screens=screens,
-        calibrated=bool(screens) and bool(raw.get("calibrated", True)),
+        calibrated=bool(screens) and bool(section.get("calibrated", True)),
         base_dir=target.parent,
+        game=game,
+        offered=sorted(games) if games else [],
     )
