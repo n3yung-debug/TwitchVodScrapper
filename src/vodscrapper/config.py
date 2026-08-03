@@ -270,6 +270,10 @@ class GameProfile:
     # Which section of regions.yaml holds this game's screens. Defaults to
     # the profile's own key.
     regions_key: str = ""
+    # Which ending-screen tally this game uses (see stats/tally.py). Blank
+    # means no tally is implemented for it yet: its OCR stage sits out and
+    # says so, rather than being scored against another game's semantics.
+    tally: str = ""
 
 
 @dataclass
@@ -324,6 +328,7 @@ class Config:
             ),
             "mistfall": GameProfile(
                 label="Mistfall Hunter",
+                tally="extraction",
                 description=(
                     "A dark-fantasy PvPvE extraction ARPG: players drop in, "
                     "fight monsters and rival squads for loot, and only keep "
@@ -419,7 +424,34 @@ def load_config(path: str | Path | None = None) -> Config:
         return Config()
     with open(target, "r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh) or {}
-    return _build(Config, raw)
+    config = _build(Config, raw)
+    _restore_game_defaults(config)
+    return config
+
+
+def _restore_game_defaults(config: Config) -> None:
+    """Fill blank per-game fields from the shipped defaults.
+
+    A user's ``games:`` block replaces the built-in dict wholesale, so any
+    field it omits would fall back to ``GameProfile``'s own empty defaults
+    rather than to what ships here. That is how a config written before
+    ``tally`` existed silently turned Mistfall's stats off: the key was
+    absent, so the tally became "", so the game read as untallied.
+
+    Only blank fields are filled, so an explicit override always wins --
+    including an explicit empty string, which round-trips as blank and is
+    indistinguishable from omission. That is an accepted limitation: wanting
+    a shipped game to have *no* tally is not a real case, and silently
+    losing one is.
+    """
+    shipped = Config().games
+    for key, profile in config.games.items():
+        default = shipped.get(key)
+        if default is None:
+            continue
+        for name in ("label", "description", "regions_key", "tally"):
+            if not getattr(profile, name):
+                setattr(profile, name, getattr(default, name))
 
 
 def dump_default_config(path: str | Path) -> None:

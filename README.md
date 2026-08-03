@@ -87,7 +87,7 @@ vodscrap review
 | `vodscrap analyze [file]` | Detection cascade; defaults to the newest recording |
 | `vodscrap review` | Opens the review UI at `127.0.0.1:8723` |
 | `vodscrap clip` | Native Twitch clips from approved candidates (dry run by default) |
-| `vodscrap summary` | Session stats — kills, extract rate, gold |
+| `vodscrap summary` | Session tally (Mistfall: kills, extract rate, gold) |
 | `vodscrap calibrate` | Pull a frame with a coordinate grid, to fill in `regions.yaml` |
 | `vodscrap remux <file>` | Lossless MKV → MP4 |
 | `vodscrap prune` | Delete old, already-reviewed recordings (dry run by default) |
@@ -101,11 +101,21 @@ Several games coexist. What's shared and what isn't falls out cleanly:
 
 | Shared across every game | Per game |
 |---|---|
-| Hotkey markers, chat velocity, mic energy | OCR screen regions and anchors |
+| Hotkey markers, chat velocity, mic energy | Ending screens, and the regions that read them |
 | Merge/ranking, review UI, render, clips | The genre description sent to the reranker |
-| Retention, timing, calibration tooling | What a "match result" even means |
+| Retention, timing, calibration tooling | The **tally** — what those screens count as |
 
 Tiers 0–2 don't care what you're playing. Tier 4 cares entirely.
+
+**Only Mistfall Hunter is tallied right now.** Its ending screens
+(`post_match`, `stash`) count into kills, extract rate and gold endpoints.
+Rust and FC 26 are configured and calibratable, but have no tally yet, so
+their results aren't counted — and they say so rather than being scored as
+extraction runs, which would report "0 kills, 0 extracted" with total
+confidence. Detection is unaffected either way.
+
+Adding a game's tally later means writing its ending-screen bookkeeping in
+`stats/tally.py` and registering it. Nothing else in the pipeline changes.
 
 ```
 vodscrap games                        # what's configured, and its state
@@ -120,8 +130,9 @@ genre, and both fail quietly rather than erroring. With no game selected,
 detection still runs on markers, chat and mic; only the OCR stage sits out,
 and it says so.
 
-Adding a game is two edits, no code: a `games:` entry in `config.yaml` (label
-and a one-line genre description) and a section in `regions.yaml`.
+Calibrating a new game is two edits, no code: a `games:` entry in
+`config.yaml` (label, genre description) and a section in `regions.yaml`.
+Counting its results is the extra step that needs a tally.
 
 ---
 
@@ -136,7 +147,7 @@ previous tiers surfaced.
 | 1 | **Chat velocity** | free | Rolling **z-score**, not an absolute count — self-calibrates between a quiet night and a raid. Weighted for laugh emotes and "clip that". |
 | 2 | **Mic energy** | seconds | Sustained jumps above your own rolling baseline; scores higher out of silence. The tier that works when chat is dead. |
 | 3 | **Whisper + LLM** | minutes | Runs on **±60s around existing candidates only**. Transcribing 8 hours would cost hours for no gain. |
-| 4 | **Match results** | minutes | OCR of the post-match screen. A 9-kill extraction says the previous 90s is worth watching. |
+| 4 | **Match results** | minutes | OCR of the game's ending screen, for games with a tally. A 9-kill extraction says the previous 90s is worth watching. |
 
 Overlapping detections merge by taking the **best score per source** and
 summing across sources — so six small chat hits can't out-rank one deliberate
@@ -208,6 +219,8 @@ and a second run won't duplicate them.
 ---
 
 ## Session stats
+
+Mistfall Hunter only, for now — see [Games](#games).
 
 ```
 Matches: 23   ·   Extracted: 14 (61%)   ·   Died: 9

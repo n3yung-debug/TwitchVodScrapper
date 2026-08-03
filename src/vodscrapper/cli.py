@@ -199,6 +199,7 @@ def cmd_prune(args: argparse.Namespace) -> int:
 def cmd_games(args: argparse.Namespace) -> int:
     """Show the configured games and how far each one is calibrated."""
     from .stats.regions import load_regions
+    from .stats.tally import tally_for
 
     config = _load(args)
     if not config.games:
@@ -217,8 +218,11 @@ def cmd_games(args: argparse.Namespace) -> int:
             state = "no section in the regions file"
         else:
             state = "not calibrated"
+        tally = tally_for(profile.tally)
+        counts = tally.label if tally else "no tally yet -- results not counted"
         mark = "*" if key == active else " "
         print(f" {mark} {key:<10s} {profile.label or key:<20s} {state}")
+        print(f"   {'':<10s} {'':<20s} {counts}")
 
     print()
     if active:

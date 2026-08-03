@@ -97,22 +97,29 @@ genre description, and what a "match result" means at all.
 Adding a game is config-only — a `games:` entry in `config.yaml` and a section
 under `games:` in `regions.yaml`. No code.
 
+Each game names a **tally** (`stats/tally.py`) — the thing that turns its
+ending screens into counted results. A game with no tally has its OCR stage
+sit out entirely; it is never scored using another game's tally. Only the
+`extraction` tally exists today.
+
 ### Rust
 Survival sandbox, wipe cycles, base building and raiding. No per-match summary
 screen the way an extraction game has one, so tier 4 has little to read —
-what's worth OCR'ing is situational and currently uncalibrated.
+what's worth OCR'ing is situational and currently uncalibrated. **No tally.**
 
 ### Mistfall Hunter
 PvPvE extraction ARPG, launched 2026-07-29. The game the stats schema was
 originally shaped around: `post_match` (kills, survived) and `stash` (stash
 value, liquid) screens. Gold is read as first/last endpoints plus a delta,
-never per match. Uncalibrated.
+never per match. Uncalibrated. **Tally: `extraction`** — the only one
+implemented, and the only game whose results are counted today.
 
 ### EA Sports FC 26
 Football. Its full-time screen shares nothing with the extraction games —
 goals, not kills. Fields the summary schema doesn't know about land in
 `MatchResult.extra`, so it can be tracked without the schema growing first.
-Uncalibrated.
+Uncalibrated. **No tally** — calibrating its screens is not enough to make it
+count; a tally has to be written for it.
 
 ---
 
@@ -129,11 +136,11 @@ Uncalibrated.
   every section uncalibrated, so the stats stage skips itself per game and
   says so. `vodscrap calibrate --game <game>` reads coordinates off a real
   frame; `vodscrap games` shows the state of each.
-- **The session summary schema is extraction-shaped** (kills, extracted, died,
-  stash/liquid gold). It fits Mistfall Hunter, roughly fits Rust, and does not
-  fit FC 26. `MatchResult.extra` is the escape hatch for now. Whether this
-  should generalise is an open question for Nick, not something to decide
-  unilaterally.
+- **Only Mistfall Hunter is tallied** (decided 2026-08-03). Rust and FC 26
+  will get their own ending screens and tallies later; until then their OCR
+  stage sits out and says so. Do not generalise the summary schema
+  speculatively — write each game's tally when that game's screens are
+  actually being counted.
 - **The facecam box is a placeholder** (`480x270` at `24,1146`, assuming
   2560x1440). Vertical renders crop the wrong area until it is measured.
 

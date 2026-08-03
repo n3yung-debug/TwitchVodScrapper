@@ -22,6 +22,7 @@ from pathlib import Path
 
 from .config import Config
 from .media import nvenc_available, run
+from .stats.tally import known_tallies, tally_for
 
 OK = "OK"
 WARN = "WARN"
@@ -275,7 +276,21 @@ def check_calibration(config: Config, report: Report) -> None:
             "Pass --game, or set 'game:' in the config. See 'vodscrap games'.",
         )
     elif config.stats.enabled:
-        report.add("game", OK, config.game)
+        profile = config.profile
+        tally = tally_for(profile.tally if profile else "")
+        report.add(
+            "game", OK,
+            f"{config.game}" + (f" (tally: {tally.name})" if tally else ""),
+        )
+        if tally is None:
+            report.add(
+                "tally", WARN,
+                f"no ending-screen tally is implemented for '{config.game}', "
+                "so its results are not counted",
+                f"Only {', '.join(known_tallies())} exists today; detection is unaffected",
+            )
+        else:
+            report.add("tally", OK, f"{tally.name} -- {tally.label}")
         regions = load_regions(config.stats.regions_file, game=config.game)
         if regions.calibrated:
             missing = [

@@ -29,6 +29,7 @@ from .markers.interpret import markers_to_candidates
 from .markers.store import MarkerStore
 from .models import Candidate, ChatMessage, SessionSummary, Source
 from .stats.regions import load_regions
+from .stats.tally import known_tallies, tally_for
 from .timing import clamp
 
 
@@ -177,9 +178,32 @@ def _gather_stats(
         )
         return None, []
 
+    # A game's ending screens only mean something to a tally written for that
+    # game. Running the extraction tally over a football full-time screen
+    # would report "0 kills, 0 extracted, 0 died" with total confidence,
+    # which is worse than reporting nothing.
+    profile = config.profile
+    tally = tally_for(profile.tally if profile else "")
+    if tally is None:
+        warnings.append(
+            f"post-match stats skipped: no tally is implemented for "
+            f"'{config.game}' yet, so its ending screens have nothing to be "
+            f"counted into. Implemented: {', '.join(known_tallies())}. "
+            "Detection is unaffected -- markers, chat and mic energy do not "
+            "depend on the game."
+        )
+        return None, []
+
+    absent = tally.missing_screens(regions.screens)
+    if absent:
+        warnings.append(
+            f"post-match stats skipped: the '{config.game}' regions are missing "
+            f"the {', '.join(absent)} screen(s) that the {tally.name} tally reads."
+        )
+        return None, []
+
     try:
         from .stats.screens import find_screens
-        from .stats.summary import build_summary, collect, result_candidates
 
         hits = find_screens(
             recording.path,
@@ -188,12 +212,12 @@ def _gather_stats(
             config.stats,
             ffmpeg=config.paths.ffmpeg,
         )
-        matches, wealth, notes = collect(
+        matches, wealth, notes = tally.collect(
             recording.path, hits, regions, config.stats, work_dir,
             ffmpeg=config.paths.ffmpeg,
         )
-        summary = build_summary(matches, wealth, notes)
-        extra = result_candidates(
+        summary = tally.summarise(matches, wealth, notes)
+        extra = tally.candidates(
             matches, recording.duration, config.stats, config.detect.match_result_max_score
         )
         return summary, extra

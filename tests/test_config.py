@@ -7,6 +7,8 @@ section, which may be an hour into a render.
 
 from __future__ import annotations
 
+import textwrap
+
 import pytest
 import yaml
 
@@ -84,3 +86,51 @@ def test_stream_copy_is_off_by_default():
 
 def test_default_llm_model_is_pinned():
     assert Config().detect.llm.model == "claude-opus-5"
+
+
+class TestGameDefaults:
+    """A user's games: block replaces the shipped dict wholesale.
+
+    Anything it omits must fall back to what ships, not to GameProfile's own
+    empty defaults -- that is how a config written before `tally` existed
+    silently turned Mistfall's stats off.
+    """
+
+    def write(self, tmp_path, body: str):
+        path = tmp_path / "config.yaml"
+        path.write_text(textwrap.dedent(body), encoding="utf-8")
+        return load_config(path)
+
+    def test_omitted_tally_is_restored_from_the_shipped_default(self, tmp_path):
+        config = self.write(tmp_path, """
+            games:
+              mistfall:
+                label: Mistfall Hunter
+                description: something the user rewrote
+        """)
+        assert config.games["mistfall"].tally == "extraction"
+        assert config.games["mistfall"].description == "something the user rewrote"
+
+    def test_a_game_with_no_shipped_default_is_left_alone(self, tmp_path):
+        config = self.write(tmp_path, """
+            games:
+              valorant:
+                label: Valorant
+        """)
+        assert config.games["valorant"].tally == ""
+        assert config.games["valorant"].label == "Valorant"
+
+    def test_shipped_games_omitted_entirely_are_not_readded(self, tmp_path):
+        # Dropping a game from the config is a deliberate act; restoring it
+        # would make the file lie about what is configured.
+        config = self.write(tmp_path, """
+            games:
+              rust:
+                label: Rust
+        """)
+        assert set(config.games) == {"rust"}
+
+    def test_defaults_still_apply_when_no_games_block_is_present(self, tmp_path):
+        config = self.write(tmp_path, "game: mistfall\n")
+        assert config.games["mistfall"].tally == "extraction"
+        assert config.profile.tally == "extraction"
