@@ -251,9 +251,10 @@ class Renderer:
     def encoder(self) -> str:
         if self._encoder is None:
             wanted = self.config.render.encoder
-            if "nvenc" in wanted and not nvenc_available(self.config.paths.ffmpeg):
+            if "nvenc" in wanted and not nvenc_available(self.config.paths.ffmpeg, wanted):
                 print(
-                    f"[render] {wanted} unavailable in this ffmpeg build; "
+                    f"[render] {wanted} cannot encode on this machine "
+                    "(not built in, or the NVIDIA driver is not usable); "
                     f"falling back to {self.config.render.fallback_encoder}"
                 )
                 self._encoder = self.config.render.fallback_encoder

@@ -91,17 +91,46 @@ def probe(path: str | Path, ffprobe: str = "ffprobe") -> MediaInfo:
     return MediaInfo(path=str(path), duration=duration, streams=streams)
 
 
-def nvenc_available(ffmpeg: str = "ffmpeg") -> bool:
-    """Check whether this ffmpeg build exposes NVENC.
+_NVENC_CACHE: dict[str, bool] = {}
 
-    Used to fall back to libx264 when the pipeline runs somewhere without
-    the GPU, rather than failing the whole render.
+
+def nvenc_available(ffmpeg: str = "ffmpeg", encoder: str = "hevc_nvenc") -> bool:
+    """Check whether NVENC can actually encode, not just whether it is listed.
+
+    Listing is not the same as working. ``ffmpeg -encoders`` reports every
+    encoder compiled into the build, and NVENC is compiled into most of
+    them -- but it only loads at runtime if the NVIDIA driver is present and
+    usable. On a machine without the GPU (or with a driver mismatch) the
+    listing check passes and the render then dies with "Cannot load
+    libcuda.so.1", which is exactly the fallback this function exists to
+    trigger.
+
+    So: cheap listing check first, then a real one-frame encode to a null
+    output. That costs a few hundred milliseconds once per process and is
+    cached, against a render that otherwise fails after the loudness pass.
     """
+    key = f"{ffmpeg}\x00{encoder}"
+    if key in _NVENC_CACHE:
+        return _NVENC_CACHE[key]
+
+    result = False
     try:
-        proc = run([ffmpeg, "-hide_banner", "-encoders"], check=False)
-    except FileNotFoundError:
-        return False
-    return "nvenc" in proc.stdout
+        listed = run([ffmpeg, "-hide_banner", "-encoders"], check=False)
+        if encoder in listed.stdout:
+            probe = run(
+                [
+                    ffmpeg, "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1",
+                    "-c:v", encoder, "-f", "null", "-",
+                ],
+                check=False,
+            )
+            result = probe.returncode == 0
+    except (FileNotFoundError, OSError):
+        result = False
+
+    _NVENC_CACHE[key] = result
+    return result
 
 
 def remux(src: str | Path, dest: str | Path, ffmpeg: str = "ffmpeg") -> Path:

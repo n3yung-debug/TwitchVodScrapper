@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
+
+from vodscrapper import media
 
 from vodscrapper.config import (
     AudioTracks,
@@ -16,6 +19,7 @@ from vodscrapper.render.captions import build_ass, group_words
 from vodscrapper.render.ffmpeg import (
     AudioSelection,
     RenderJob,
+    Renderer,
     build_audio_filter,
     build_render_command,
     build_video_filters,
@@ -230,3 +234,82 @@ def test_ass_escapes_braces():
     words = [Word(0.0, 0.5, "{drop}")]
     ass = build_ass(words, 0.0, 5.0, 1080, 1920, CaptionStyle(uppercase=False))
     assert r"\{drop\}" in ass
+
+
+class TestNvencDetection:
+    """Being listed by ffmpeg is not the same as being able to encode.
+
+    NVENC is compiled into most ffmpeg builds but only loads if the NVIDIA
+    driver is usable. The listing-only check passed on a machine with no
+    usable driver and the render then died with "Cannot load libcuda.so.1"
+    after the loudness pass had already run -- which is precisely the case
+    the fallback exists to handle.
+    """
+
+    @staticmethod
+    def _fake_run(listed: bool, encodes: bool, calls: list[list[str]]):
+        def fake(cmd, check=True):
+            calls.append(list(cmd))
+            if "-encoders" in cmd:
+                return SimpleNamespace(
+                    stdout="hevc_nvenc h264_nvenc\n" if listed else "libx264\n",
+                    stderr="",
+                    returncode=0,
+                )
+            return SimpleNamespace(stdout="", stderr="", returncode=0 if encodes else 1)
+
+        return fake
+
+    def test_listed_but_unusable_is_reported_unavailable(self, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(media, "_NVENC_CACHE", {})
+        monkeypatch.setattr(media, "run", self._fake_run(True, False, calls))
+        assert media.nvenc_available("ffmpeg-a") is False
+        # It must have actually attempted an encode, not just read the list.
+        assert any("-f" in c and "null" in c for c in calls)
+
+    def test_listed_and_usable_is_available(self, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(media, "_NVENC_CACHE", {})
+        monkeypatch.setattr(media, "run", self._fake_run(True, True, calls))
+        assert media.nvenc_available("ffmpeg-b") is True
+
+    def test_not_listed_skips_the_probe_encode(self, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(media, "_NVENC_CACHE", {})
+        monkeypatch.setattr(media, "run", self._fake_run(False, True, calls))
+        assert media.nvenc_available("ffmpeg-c") is False
+        assert len(calls) == 1
+
+    def test_result_is_cached_per_binary(self, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(media, "_NVENC_CACHE", {})
+        monkeypatch.setattr(media, "run", self._fake_run(True, True, calls))
+        media.nvenc_available("ffmpeg-d")
+        media.nvenc_available("ffmpeg-d")
+        assert len(calls) == 2  # one listing + one probe, not four
+
+    def test_missing_binary_is_not_an_error(self, monkeypatch):
+        def boom(cmd, check=True):
+            raise FileNotFoundError(cmd[0])
+
+        monkeypatch.setattr(media, "_NVENC_CACHE", {})
+        monkeypatch.setattr(media, "run", boom)
+        assert media.nvenc_available("nope") is False
+
+    def test_renderer_falls_back_when_nvenc_cannot_encode(self, monkeypatch):
+        config = Config()
+        config.render.encoder = "hevc_nvenc"
+        config.render.fallback_encoder = "libx264"
+        monkeypatch.setattr(
+            "vodscrapper.render.ffmpeg.nvenc_available", lambda *a, **k: False
+        )
+        assert Renderer(config).encoder() == "libx264"
+
+    def test_renderer_keeps_nvenc_when_it_works(self, monkeypatch):
+        config = Config()
+        config.render.encoder = "hevc_nvenc"
+        monkeypatch.setattr(
+            "vodscrapper.render.ffmpeg.nvenc_available", lambda *a, **k: True
+        )
+        assert Renderer(config).encoder() == "hevc_nvenc"

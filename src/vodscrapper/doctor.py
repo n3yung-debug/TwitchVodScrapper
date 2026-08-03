@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Config
-from .media import run
+from .media import nvenc_available, run
 
 OK = "OK"
 WARN = "WARN"
@@ -102,14 +102,27 @@ def check_encoder(config: Config, report: Report) -> None:
     proc = run([config.paths.ffmpeg, "-hide_banner", "-encoders"], check=False)
     encoders = proc.stdout or ""
     wanted = config.render.encoder
-    if wanted in encoders:
-        report.add("encoder", OK, f"{wanted} available")
+
+    # Being listed is not the same as working: NVENC is compiled into most
+    # builds but only loads if the driver is usable, so this actually tries a
+    # one-frame encode. Otherwise the failure surfaces mid-render instead.
+    if "nvenc" in wanted:
+        usable = nvenc_available(config.paths.ffmpeg, wanted)
+    else:
+        usable = wanted in encoders
+
+    if usable:
+        report.add("encoder", OK, f"{wanted} encodes successfully")
     elif config.render.fallback_encoder in encoders:
+        listed = wanted in encoders
         report.add(
             "encoder", WARN,
-            f"{wanted} is not in this ffmpeg build; renders will fall back to "
-            f"{config.render.fallback_encoder} (CPU, much slower)",
-            "Install a CUDA-enabled ffmpeg build to use the 5070 Ti for encoding",
+            f"{wanted} " + (
+                "is listed but cannot encode here (driver not usable)" if listed
+                else "is not in this ffmpeg build"
+            ) + f"; renders will fall back to {config.render.fallback_encoder} "
+            "(CPU, much slower)",
+            "Check the NVIDIA driver, or install a CUDA-enabled ffmpeg build",
         )
     else:
         report.add(
