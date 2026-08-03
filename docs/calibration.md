@@ -25,9 +25,41 @@ different layouts, the boxes and the anchor have to work for both.
 
 ## Reading coordinates off a screenshot
 
-Any image editor that shows a pixel-coordinate readout works. In Paint.NET,
-GIMP, or Photoshop, drag a rectangular selection over the value and read off
-the position and size.
+The easiest path is to let the tool pull the frame for you, because then it
+is guaranteed to be the exact source the pipeline reads, at the resolution it
+was actually recorded at:
+
+```
+vodscrap calibrate grid --at 1800
+```
+
+That writes a PNG of the frame 30 minutes into the newest recording with a
+labelled coordinate grid stamped over it — 100 px cells by default
+(`--step`), numbered every 500 px. Read `x,y,w,h` straight off the picture.
+
+Then confirm a box before trusting it:
+
+```
+vodscrap calibrate crop --at 1800 --box 1200,620,140,70
+```
+
+If that crop shows exactly the value you want read and nothing else, the box
+is right. This is also how anchor images get made — crop something on the
+screen that never changes, and save it next to `regions.yaml`.
+
+Once the YAML is filled in, draw everything back onto the frame at once:
+
+```
+vodscrap calibrate check --at 1800
+```
+
+Anything landing in the wrong place is a number to fix, not a bug in the OCR.
+
+A screenshot and an image editor work just as well if you prefer. In
+Paint.NET, GIMP, or Photoshop, drag a rectangular selection over the value and
+read off the position and size. Just make sure the screenshot is at your
+recording resolution — coordinates read off a 1080p grab are wrong for a
+1440p recording by exactly that factor, and it looks like OCR simply failing.
 
 Boxes are `[x, y, width, height]` in **source pixels**, with `(0, 0)` at the
 top-left of the frame.

@@ -176,6 +176,223 @@ def cmd_prune(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Check everything that can be checked before it costs a stream."""
+    from .doctor import format_report, run_checks
+    from .config import DEFAULT_CONFIG_PATH
+
+    config_path = Path(args.config) if args.config else DEFAULT_CONFIG_PATH
+    config = load_config(args.config)
+    report = run_checks(config, config_path, online=args.online)
+    print(format_report(report))
+    return 1 if report.failed else 0
+
+
+def _session_path(config: Config, args: argparse.Namespace) -> Path:
+    from .pipeline import session_file
+
+    if getattr(args, "session", None):
+        return Path(args.session)
+    recording = _resolve_recording(config, getattr(args, "recording", None))
+    return session_file(config, recording)
+
+
+def cmd_clip(args: argparse.Namespace) -> int:
+    """Create native Twitch clips from reviewed candidates.
+
+    Dry run by default, like ``prune``: this writes to Nick's public channel,
+    and the bounds have already been reshaped to fit Twitch's 5-60s rule, so
+    the plan is worth reading before it runs.
+    """
+    import json
+
+    from .ingest.twitch import TwitchClient, TwitchError
+    from .publish import (
+        create_clips, format_plan, plan_clips, record_result, select_candidates,
+    )
+    from .pipeline import load_session
+
+    config = load_config(args.config)
+    path = _session_path(config, args)
+    if not path.exists():
+        raise SystemExit(f"no session at {path}; run 'vodscrap analyze' first")
+    session = load_session(path)
+    candidates = session.get("candidates", [])
+    if not candidates:
+        print("this session has no candidates")
+        return 1
+
+    vod_id = session.get("vod_id") or args.vod
+    if not vod_id:
+        raise SystemExit(
+            "this session has no Twitch VOD attached, so there is nothing to clip "
+            "from. That happens when the recording did not overlap a stream, when "
+            "the VOD expired before 'analyze' ran, or when Twitch credentials were "
+            "not configured at the time. Pass --vod <id> to name one explicitly."
+        )
+
+    if not config.twitch.client_id or not config.oauth_token:
+        raise SystemExit(
+            "needs twitch.client_id and the OAuth token env var "
+            f"({config.twitch.oauth_token_env}), with the clips:edit scope"
+        )
+
+    indices = select_candidates(
+        candidates,
+        approved_only=not args.all,
+        top=args.top,
+        indices=args.index or None,
+        include_clipped=args.force,
+    )
+    if not indices:
+        print(
+            "nothing to clip. Approve candidates in 'vodscrap review' first, "
+            "or pass --all to clip every candidate, or --force to re-clip ones "
+            "that already have a Twitch clip."
+        )
+        return 1
+
+    client = TwitchClient(config.twitch.client_id, config.oauth_token)
+    try:
+        user_id = config.twitch.broadcaster_id or client.user_id(config.twitch.login)
+    except TwitchError as exc:
+        raise SystemExit(str(exc))
+
+    # Prefer what the session recorded; fall back to asking Twitch, which is
+    # what happens for sessions analysed before the VOD start was stored.
+    vod_start = session.get("vod_start_utc")
+    vod_duration = float(session.get("vod_duration") or 0.0)
+    if vod_start:
+        from datetime import datetime as _dt
+
+        vod_start_utc = _dt.fromisoformat(vod_start)
+    else:
+        vod = client.video(vod_id)
+        if vod is None:
+            raise SystemExit(
+                f"Twitch has no VOD {vod_id} -- it has probably expired. Native "
+                "clips can only be cut from a VOD that still exists; the local "
+                "renders are unaffected."
+            )
+        vod_start_utc, vod_duration = vod.created_at, vod.duration_seconds
+
+    plans = plan_clips(
+        session, config.twitch, indices,
+        vod_start_utc=vod_start_utc, vod_duration=vod_duration,
+    )
+    usable = [p for p in plans if p.usable]
+
+    print(f"VOD {vod_id}, {len(plans)} candidate(s) selected:\n")
+    print(format_plan(plans))
+    print()
+
+    if not config.twitch.vod_offset_is_start:
+        print("note: twitch.vod_offset_is_start is false, so offsets are sent as clip ENDs")
+    print(
+        "reminder: twitch.vod_offset_is_start has not been verified on this "
+        "channel -- 'vodscrap verify-clip-offset' settles it with one throwaway clip"
+    )
+
+    if not args.create:
+        print(f"\nwould create {len(usable)} clip(s). Re-run with --create to do it.")
+        return 0
+    if not usable:
+        print("nothing usable to create")
+        return 1
+
+    print(f"\ncreating {len(usable)} clip(s) ...")
+    created = 0
+    for result in create_clips(
+        client, plans,
+        broadcaster_id=user_id,
+        video_id=vod_id,
+        vod_offset_is_start=config.twitch.vod_offset_is_start,
+    ):
+        if result.ok:
+            created += 1
+            record_result(candidates[result.plan.index], result)
+            print(f"  #{result.plan.index:<3d} {result.url}")
+        elif result.plan.usable:
+            print(f"  #{result.plan.index:<3d} FAILED: {result.error}")
+        # Skipped plans were already explained in the printed plan above.
+
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(session, fh, indent=2)
+
+    print(f"\ncreated {created} of {len(usable)}. Clips take 15-30s to become playable.")
+    return 0 if created == len(usable) else 1
+
+
+def cmd_calibrate(args: argparse.Namespace) -> int:
+    """Pull a frame and stamp coordinates on it, for filling in the YAML."""
+    from .calibrate import (
+        Box, collect_configured_boxes, crop_box, draw_boxes, draw_grid,
+        draw_grid_ffmpeg, extract_frame,
+    )
+    from .media import MediaError
+
+    config = load_config(args.config)
+    recording = _resolve_recording(config, args.recording)
+    out_dir = Path(args.out_dir) if args.out_dir else Path(config.paths.work_dir) / "calibration"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = f"{int(args.at):06d}"
+
+    frame = extract_frame(
+        recording.path, args.at, out_dir / f"frame-{stamp}.png", ffmpeg=config.paths.ffmpeg
+    )
+    resolution = recording.resolution or (1920, 1080)
+    print(f"frame at {args.at:.0f}s from {recording.name}  ({resolution[0]}x{resolution[1]})")
+    print(f"  {frame}")
+
+    if args.mode == "grid":
+        dest = out_dir / f"grid-{stamp}.png"
+        if args.no_labels:
+            draw_grid_ffmpeg(frame, dest, step=args.step, ffmpeg=config.paths.ffmpeg)
+        else:
+            try:
+                draw_grid(frame, dest, step=args.step)
+            except MediaError as exc:
+                print(f"  ({exc})")
+                draw_grid_ffmpeg(frame, dest, step=args.step, ffmpeg=config.paths.ffmpeg)
+        print(f"  {dest}")
+        print(
+            f"\nRead x,y,w,h off the grid ({args.step}px cells, labelled every "
+            f"{args.step * 5}px), then fill in {config.stats.regions_file} "
+            f"with source_resolution: [{resolution[0]}, {resolution[1]}].\n"
+            "Confirm a box with:  vodscrap calibrate crop --at "
+            f"{int(args.at)} --box x,y,w,h"
+        )
+        return 0
+
+    if args.mode == "crop":
+        if not args.box:
+            raise SystemExit("crop needs --box x,y,w,h")
+        box = Box.parse(args.box)
+        dest = out_dir / f"crop-{stamp}-{box.x}_{box.y}_{box.width}_{box.height}.png"
+        crop_box(frame, box, dest, ffmpeg=config.paths.ffmpeg)
+        print(f"  {dest}")
+        print(
+            "\nIf that shows exactly the value you want read and nothing else, "
+            "the box is right. This is also how anchor images are made -- crop "
+            "something that never changes, and save it next to regions.yaml."
+        )
+        return 0
+
+    # mode == "check"
+    boxes = collect_configured_boxes(config, resolution)
+    if not boxes:
+        print("\nnothing configured to draw yet -- start with 'calibrate grid'")
+        return 1
+    if args.box:
+        boxes.append(("--box", Box.parse(args.box)))
+    dest = out_dir / f"check-{stamp}.png"
+    draw_boxes(frame, boxes, dest)
+    print(f"  {dest}")
+    print(f"\ndrew {len(boxes)} configured box(es). Anything landing in the wrong "
+          "place is a number to fix, not a bug in the OCR.")
+    return 0
+
+
 def cmd_verify_clip_offset(args: argparse.Namespace) -> int:
     """Settle what Twitch's vod_offset parameter actually means.
 
@@ -272,6 +489,54 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--delete", action="store_true", help="actually delete (default is a dry run)")
     p.add_argument("--all", action="store_true", help="show every recording and why it is kept")
     p.set_defaults(func=cmd_prune)
+
+    p = sub.add_parser("doctor", help="check the install, paths, credentials and calibration")
+    p.add_argument(
+        "--online", action="store_true",
+        help="also validate the Twitch token and its scopes against Twitch",
+    )
+    p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("clip", help="create native Twitch clips from approved candidates")
+    p.add_argument("recording", nargs="?")
+    p.add_argument("--session", help="path to a session.json")
+    p.add_argument(
+        "--create", action="store_true",
+        help="actually create the clips (default is a dry run showing the plan)",
+    )
+    p.add_argument(
+        "--all", action="store_true",
+        help="clip every candidate, not just the ones approved in the review UI",
+    )
+    p.add_argument("--top", type=int, help="limit to the N highest-ranked selected candidates")
+    p.add_argument(
+        "--index", type=int, action="append",
+        help="clip a specific candidate by index; repeatable",
+    )
+    p.add_argument(
+        "--force", action="store_true",
+        help="include candidates that already have a Twitch clip",
+    )
+    p.add_argument("--vod", help="VOD id, when the session did not record one")
+    p.set_defaults(func=cmd_clip)
+
+    p = sub.add_parser(
+        "calibrate",
+        help="pull a frame with a coordinate grid, to fill in regions.yaml",
+    )
+    p.add_argument(
+        "mode", nargs="?", default="grid", choices=["grid", "crop", "check"],
+        help="grid: labelled coordinates; crop: cut one box out; check: draw configured boxes",
+    )
+    # A flag rather than a positional: two optional positionals after a mode
+    # choice makes "calibrate foo.mkv" parse as an invalid mode.
+    p.add_argument("--recording", help="defaults to the newest recording")
+    p.add_argument("--at", type=float, default=600.0, help="seconds into the recording")
+    p.add_argument("--step", type=int, default=100, help="grid spacing in pixels")
+    p.add_argument("--box", help="x,y,w,h for crop mode")
+    p.add_argument("--out-dir", help="defaults to <work_dir>/calibration")
+    p.add_argument("--no-labels", action="store_true", help="ffmpeg-only grid, no OpenCV")
+    p.set_defaults(func=cmd_calibrate)
 
     p = sub.add_parser(
         "verify-clip-offset",

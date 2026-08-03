@@ -57,6 +57,19 @@ def parse_duration(text: str) -> float:
     return total
 
 
+def _parse_vod(raw: dict[str, Any]) -> Vod:
+    return Vod(
+        id=raw["id"],
+        title=raw.get("title", ""),
+        created_at=datetime.fromisoformat(raw["created_at"].replace("Z", "+00:00")),
+        published_at=datetime.fromisoformat(
+            raw.get("published_at", raw["created_at"]).replace("Z", "+00:00")
+        ),
+        duration_seconds=parse_duration(raw.get("duration", "0s")),
+        url=raw.get("url", ""),
+    )
+
+
 class TwitchClient:
     def __init__(self, client_id: str, oauth_token: str, timeout: float = 20.0):
         if not client_id:
@@ -116,23 +129,37 @@ class TwitchClient:
             "GET", "videos",
             params={"user_id": user_id, "first": min(first, 100), "type": "archive"},
         )
-        out: list[Vod] = []
-        for raw in data.get("data", []):
-            out.append(
-                Vod(
-                    id=raw["id"],
-                    title=raw.get("title", ""),
-                    created_at=datetime.fromisoformat(
-                        raw["created_at"].replace("Z", "+00:00")
-                    ),
-                    published_at=datetime.fromisoformat(
-                        raw.get("published_at", raw["created_at"]).replace("Z", "+00:00")
-                    ),
-                    duration_seconds=parse_duration(raw.get("duration", "0s")),
-                    url=raw.get("url", ""),
-                )
-            )
-        return out
+        return [_parse_vod(raw) for raw in data.get("data", [])]
+
+    def video(self, video_id: str) -> Vod | None:
+        """Look up a single VOD by id.
+
+        Needed by ``vodscrap clip``: a session records which VOD it matched,
+        but native clip creation also needs that VOD's start time to convert
+        recording offsets into VOD offsets, and its length to reject
+        candidates that fall outside it.
+        """
+        data = self._request("GET", "videos", params={"id": video_id})
+        entries = data.get("data", [])
+        return _parse_vod(entries[0]) if entries else None
+
+    def validate_token(self) -> dict[str, Any]:
+        """Ask Twitch what this token actually is.
+
+        The validate endpoint lives on id.twitch.tv rather than Helix, and it
+        is the only way to see a token's granted scopes -- which is what
+        turns "clip creation failed" into "your token is missing clips:edit".
+        """
+        resp = self._session.get(
+            "https://id.twitch.tv/oauth2/validate",
+            headers={"Authorization": f"OAuth {self.token}"},
+            timeout=self.timeout,
+        )
+        if resp.status_code == 401:
+            raise TwitchError("token is expired or invalid (401 from oauth2/validate)")
+        if resp.status_code >= 400:
+            raise TwitchError(f"oauth2/validate -> {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
 
     def match_vod(
         self,

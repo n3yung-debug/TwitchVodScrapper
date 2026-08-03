@@ -41,10 +41,18 @@ one thing: chat.
 ```
 pip install -e ".[daemon,analyze,ocr,ui]"
 vodscrap init
+vodscrap doctor
 ```
 
 Then work through **[docs/streamlabs-setup.md](docs/streamlabs-setup.md)** —
 recording settings, multi-track audio, hotkeys, credentials.
+
+`vodscrap doctor` checks everything that is knowable in advance: ffmpeg and
+NVENC, the GPU, paths and free space, which optional extras are installed,
+the Twitch token and its scopes (`--online`), and whether the OCR regions and
+facecam box have actually been calibrated. It separates **FAIL** (nothing
+works without this) from **WARN** (degrades gracefully and says so), because
+a report that flags everything is a report you learn to ignore.
 
 | Extra | Pulls in | Needed for |
 |---|---|---|
@@ -70,11 +78,14 @@ vodscrap review
 | Command | What it does |
 |---|---|
 | `vodscrap init` | Write a default config |
+| `vodscrap doctor` | Check install, paths, credentials, calibration |
 | `vodscrap daemon` | Hotkey marker daemon with a tray icon |
 | `vodscrap list` | Recordings found on disk |
 | `vodscrap analyze [file]` | Detection cascade; defaults to the newest recording |
 | `vodscrap review` | Opens the review UI at `127.0.0.1:8723` |
+| `vodscrap clip` | Native Twitch clips from approved candidates (dry run by default) |
 | `vodscrap summary` | Session stats — kills, extract rate, gold |
+| `vodscrap calibrate` | Pull a frame with a coordinate grid, to fill in `regions.yaml` |
 | `vodscrap remux <file>` | Lossless MKV → MP4 |
 | `vodscrap prune` | Delete old, already-reviewed recordings (dry run by default) |
 | `vodscrap verify-clip-offset` | Settles Twitch's `vod_offset` ambiguity — run once |
@@ -133,6 +144,36 @@ is yours.
 
 ---
 
+## Native Twitch clips
+
+The same reviewed bounds also make clips on the channel itself — the thing
+that shows up in Twitch's own discovery and pastes into Discord as a link.
+
+```
+vodscrap clip                # dry run: shows exactly what it would create
+vodscrap clip --create       # actually creates them
+```
+
+Defaults to the candidates you **approved** in the review UI, skips ones that
+already have a clip, and never re-cuts silently. `--all` clips every
+candidate, `--index N` picks specific ones, `--force` re-clips.
+
+Two things get handled before anything is sent, and both are printed:
+
+- **Timeline translation.** Everything upstream is in recording seconds; the
+  clip API addresses the VOD. Those clocks start at different moments — you
+  may hit record before going live — so each candidate is converted through
+  wall clock. Moments that fall outside the VOD entirely are reported as
+  skips, not dropped.
+- **Twitch's 5–60s rule.** A 90-second story gets trimmed and a 3-second
+  reaction gets padded, with the adjustment named on the line. The local
+  render keeps the full length either way.
+
+Created clips are written back into `session.json`, so the run is resumable
+and a second run won't duplicate them.
+
+---
+
 ## Session stats
 
 ```
@@ -153,6 +194,18 @@ into equipped items. A lone delta can be confidently wrong; two endpoints and
 their timestamps make an odd number visible.
 
 Needs calibration — see **[docs/calibration.md](docs/calibration.md)**.
+
+```
+vodscrap calibrate grid --at 1800            # labelled coordinate grid
+vodscrap calibrate crop --at 1800 --box 1200,620,140,70
+vodscrap calibrate check --at 1800           # draw the configured boxes back
+```
+
+The grid comes out of the recording itself, at the resolution it was actually
+recorded at — which is what makes the numbers valid. Read `x,y,w,h` off the
+picture, put them in `regions.yaml`, then `check` to confirm the boxes landed
+where you meant. The same frame gives you the facecam box for vertical
+renders.
 
 ---
 
@@ -201,4 +254,5 @@ pip install -e ".[dev]" && pytest
 Cover the parts where a silent error is expensive: timing arithmetic, marker
 interpretation, the chat z-score's self-calibration, merge scoring, vertical
 layout geometry, caption timing, ffmpeg command construction, OCR number
-parsing, and the retention guard.
+parsing, the retention guard, native clip reshaping (the 5–60s rules and the
+recording→VOD conversion), and calibration coordinate maths.

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,11 @@ class AnalysisResult:
     summary: SessionSummary | None = None
     warnings: list[str] = field(default_factory=list)
     vod_id: str = ""
+    # Recorded so that native clip creation can convert recording offsets to
+    # VOD offsets later without re-querying Twitch -- and so it still works
+    # after the VOD's metadata has aged out of easy reach.
+    vod_start_utc: datetime | None = None
+    vod_duration: float = 0.0
     used_isolated_mic: bool = False
     audio_path: str = ""
 
@@ -50,6 +55,8 @@ class AnalysisResult:
             "duration": self.recording.duration,
             "resolution": list(self.recording.resolution or (0, 0)),
             "vod_id": self.vod_id,
+            "vod_start_utc": self.vod_start_utc.isoformat() if self.vod_start_utc else None,
+            "vod_duration": self.vod_duration,
             "used_isolated_mic": self.used_isolated_mic,
             "audio_path": self.audio_path,
             "warnings": list(self.warnings),
@@ -64,15 +71,50 @@ def session_dir(config: Config, recording: Recording) -> Path:
     return path
 
 
+@dataclass
+class VodRef:
+    """The minimum needed to address a VOD after the fact."""
+
+    id: str = ""
+    start_utc: datetime | None = None
+    duration: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "start_utc": self.start_utc.isoformat() if self.start_utc else None,
+            "duration": self.duration,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "VodRef":
+        start = raw.get("start_utc")
+        return cls(
+            id=raw.get("id", ""),
+            start_utc=datetime.fromisoformat(start) if start else None,
+            duration=float(raw.get("duration", 0.0) or 0.0),
+        )
+
+
 def _gather_chat(
     config: Config,
     recording: Recording,
     work_dir: Path,
     warnings: list[str],
-) -> tuple[list[ChatMessage], str]:
+) -> tuple[list[ChatMessage], VodRef]:
     cache = work_dir / "chat.json"
+    vod_cache = work_dir / "vod.json"
     if cache.exists():
-        return load_cached_chat(cache), ""
+        # The VOD reference is cached beside the chat because a re-analyze
+        # must not silently lose it -- native clip creation needs the VOD
+        # start time, and the VOD itself may be gone by then.
+        ref = VodRef()
+        if vod_cache.exists():
+            try:
+                ref = VodRef.from_dict(json.loads(vod_cache.read_text(encoding="utf-8")))
+            except Exception:
+                pass
+        return load_cached_chat(cache), ref
 
     if not config.twitch.client_id or not config.oauth_token:
         warnings.append(
@@ -80,7 +122,7 @@ def _gather_chat(
             "Chat is usually the strongest signal -- set twitch.client_id and "
             f"the {config.twitch.oauth_token_env} env var."
         )
-        return [], ""
+        return [], VodRef()
 
     try:
         client = TwitchClient(config.twitch.client_id, config.oauth_token)
@@ -91,13 +133,15 @@ def _gather_chat(
                 "no Twitch VOD overlapped this recording, so chat was skipped "
                 "(the VOD may have expired, or the recording was made offline)"
             )
-            return [], ""
+            return [], VodRef()
         messages = fetch_chat(vod.id, vod.created_at, recording.start_utc)
         save_chat(messages, cache)
-        return messages, vod.id
+        ref = VodRef(id=vod.id, start_utc=vod.created_at, duration=vod.duration_seconds)
+        vod_cache.write_text(json.dumps(ref.to_dict(), indent=2), encoding="utf-8")
+        return messages, ref
     except (TwitchError, Exception) as exc:
         warnings.append(f"chat retrieval failed, continuing without it: {exc}")
-        return [], ""
+        return [], VodRef()
 
 
 def _gather_stats(
@@ -176,8 +220,10 @@ def analyze(config: Config, recording_path: str | Path) -> AnalysisResult:
         warnings.append("no hotkey markers fell inside this recording")
 
     # -- Tier 1: chat, scored relative to this stream's own baseline.
-    messages, vod_id = _gather_chat(config, recording, work_dir, warnings)
-    result.vod_id = vod_id
+    messages, vod = _gather_chat(config, recording, work_dir, warnings)
+    result.vod_id = vod.id
+    result.vod_start_utc = vod.start_utc
+    result.vod_duration = vod.duration
     if messages:
         candidates.extend(
             detect_chat_spikes(messages, recording.duration, config.detect.chat)
